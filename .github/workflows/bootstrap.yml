@@ -1,0 +1,133 @@
+name: Publish Protein Lab
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.bootstrap/**'
+      - '.github/workflows/bootstrap.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out bootstrap commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore repository source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .bootstrap/chunk_* | tr -d '\r\n' | base64 --decode > "$RUNNER_TEMP/proteinlab-source.tgz"
+          tar -xzf "$RUNNER_TEMP/proteinlab-source.tgz" -C .
+          rm -rf .bootstrap .github/workflows/bootstrap.yml
+
+      - name: Publish source tree to main
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Publish Protein Lab 1.0.3"
+          git push origin HEAD:main
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+
+      - name: Install pinned scientific dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Validate source and scientific core
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m compileall -q proteinlab PeptideBuilder tests
+          python -m unittest discover -s tests -v
+          python -m proteinlab.selftest --quick
+          python -m proteinlab.release_gate
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache-dependency-path: launcher/go.mod
+
+      - name: Build embedded application payload
+        shell: python
+        run: |
+          from pathlib import Path
+          import zipfile
+          root = Path.cwd()
+          output = root / 'launcher' / 'payload.zip'
+          include = ['proteinlab','PeptideBuilder','assets','tests','docs','requirements.txt','RUNTIME_LOCK.json','VERSION','LICENSE','CITATION.cff']
+          with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+              for item in include:
+                  path = root / item
+                  if path.is_dir():
+                      for file in sorted(path.rglob('*')):
+                          if file.is_file() and '__pycache__' not in file.parts and file.suffix != '.pyc':
+                              archive.write(file, file.relative_to(root).as_posix())
+                  elif path.is_file():
+                      archive.write(path, path.relative_to(root).as_posix())
+
+      - name: Build Windows GUI launcher
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(cat VERSION | tr -d '\r\n')"
+          mkdir -p dist
+          go install github.com/akavel/rsrc@latest
+          cd launcher
+          "$(go env GOPATH)/bin/rsrc" -ico ../assets/ProteinLab.ico -manifest app.manifest -o rsrc.syso
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -H=windowsgui -X main.version=${VERSION}" -o ../dist/ProteinLab.exe .
+
+      - name: Package one-file Windows release
+        shell: python
+        run: |
+          from pathlib import Path
+          import hashlib, zipfile
+          version = Path('VERSION').read_text(encoding='utf-8').strip()
+          exe = Path('dist/ProteinLab.exe')
+          asset = Path('dist') / f'ProteinLab_{version}_Windows_x64.zip'
+          with zipfile.ZipFile(asset, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+              archive.write(exe, 'ProteinLab.exe')
+          digest = hashlib.sha256(asset.read_bytes()).hexdigest()
+          Path('dist/release.env').write_text(f'VERSION={version}\nASSET={asset.name}\nSHA256={digest}\n', encoding='utf-8')
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FINAL_SHA: ${{ steps.source.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source dist/release.env
+          TAG="v${VERSION}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; refusing to replace a published release." >&2
+            exit 1
+          fi
+          cat > dist/RELEASE_NOTES.md <<EOF
+          Protein Lab ${VERSION} is the first public release of the native Windows protein-structure, molecular-simulation, and analysis workspace.
+
+          ### Windows
+          Download **${ASSET}**, extract it, and open **ProteinLab.exe**. The launcher prepares its private pinned Python/scientific runtime on first use, creates Desktop and Start Menu shortcuts, validates the installation, and then opens the application.
+
+          ### Release integrity
+          SHA-256 (${ASSET}): \`${SHA256}\`
+
+          See the repository README, validation documentation, and known limitations before interpreting scientific output.
+          EOF
+          gh release create "$TAG" "dist/${ASSET}" --target "$FINAL_SHA" --title "Protein Lab ${VERSION}" --notes-file dist/RELEASE_NOTES.md
