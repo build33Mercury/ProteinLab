@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+message: >-
+  If you use Protein Lab in academic work, cite the software version and the
+  underlying scientific methods and dependencies used in your analysis.
+title: Protein Lab
+authors:
+  - name: Protein Lab contributors
+type: software
+version: 1.0.3
+date-released: 2026-08-20
+keywords:
+  - protein structure
+  - molecular dynamics
+  - structural biology
+  - computational biology
+  - scientific software

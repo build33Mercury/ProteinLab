@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "protein-lab"
+version = "1.0.3"
+description = "Native desktop workspace for protein structure visualization, molecular simulation, and reproducible structural analysis."
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+license = { file = "LICENSE" }
+dependencies = [
+  "PySide6==6.11.2",
+  "vtk==9.7.0",
+  "gemmi==0.7.5",
+  "numpy==2.5.2",
+  "biopython==1.88",
+  "openmm==8.4.0",
+  "pdbfixer==1.12.0",
+  "certifi==2026.7.22",
+]
+
+[project.scripts]
+proteinlab = "proteinlab.startup:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["proteinlab*", "PeptideBuilder*"]
